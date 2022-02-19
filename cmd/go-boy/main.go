@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/go-gl/glfw/v3.3/glfw"
-	vk "github.com/vulkan-go/vulkan"
-	"gitlab.com/jrryy/go-boy/internal/instructions"
-	"gitlab.com/jrryy/go-boy/internal/registers"
+	"github.com/hajimehoshi/ebiten/v2"
+	game2 "go-boy/internal/game"
+	"go-boy/internal/memory"
+	"go-boy/internal/registers"
+	"log"
 	"os"
 	"runtime"
 )
@@ -15,16 +16,6 @@ func init() {
 }
 
 func main() {
-	err := glfw.Init()
-	if err != nil {
-		panic(err)
-	}
-	defer glfw.Terminate()
-
-	vk.SetGetInstanceProcAddr(glfw.GetVulkanGetInstanceProcAddress())
-
-	glfw.WindowHint(glfw.Resizable, glfw.False) // Make window non resizable
-
 	file, err := os.Open("/home/gerard/Downloads/Tetris.gb")
 	if err != nil {
 		panic(err)
@@ -39,8 +30,7 @@ func main() {
 		0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E}
 
 	scrollingNintendoGraphicB := make([]byte, 48) // The scrolling graphic thing. Only for integrity purposes.
-	titleB := make([]byte, 16) // Obtain the bytes with the title of the game.
-	instructionArray := make([]byte, 3) // Read always 3 bytes: op code and 2 possible arguments
+	titleB := make([]byte, 16)                    // Obtain the bytes with the title of the game.
 
 	_, err = file.ReadAt(scrollingNintendoGraphicB, 0x104)
 	for i := range scrollingNintendoGraphicB {
@@ -53,31 +43,16 @@ func main() {
 		panic(err)
 	}
 
-	window, err := glfw.CreateWindow(640, 576, vk.ToString(titleB), nil, nil)
-	if err != nil {
+	game := &game2.Game{
+		R: registers.GetInitializedRegisters(),
+		M: memory.GetInitializedMemory(file),
+	}
+	if err = file.Close(); err != nil {
 		panic(err)
 	}
-
-	window.MakeContextCurrent()
-
-	r := registers.InitializeRegisters()
-
-	for !window.ShouldClose() {
-		_, err = file.ReadAt(instructionArray, r.PC)
-		if err != nil {
-			panic(err)
-		}
-
-		err, bytes := instructions.Execute(r, instructionArray)
-		if err != nil {
-			 panic(err)
-		}
-
-		// Augment the PC as much as the amount of bytes of the instruction
-		r.PC += int64(bytes)
-
-		window.SwapBuffers()
-		glfw.PollEvents()
-
+	ebiten.SetWindowSize(640, 576)
+	ebiten.SetWindowTitle(string(titleB))
+	if err = ebiten.RunGame(game); err != nil {
+		log.Fatal(err)
 	}
 }
