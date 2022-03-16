@@ -5,21 +5,20 @@ import (
 )
 
 type Registers struct {
-	A     byte
-	F     byte
-	B     byte
-	C     byte
-	D     byte
-	E     byte
-	H     byte
-	L     byte
-	PC    uint16 // It's not really a 64 bit integer but to read bytes from the game file we need it like this
-	SP    uint16
-	Stack []byte
-	ZF    bool
-	NF    bool
-	HF    bool
-	CF    bool
+	A  byte
+	F  byte
+	B  byte
+	C  byte
+	D  byte
+	E  byte
+	H  byte
+	L  byte
+	PC uint16 // It's not really a 64 bit integer but to read bytes from the game file we need it like this
+	SP uint16
+	ZF bool
+	NF bool
+	HF bool
+	CF bool
 }
 
 // GetInitializedRegisters initializes a new set of registers to their zero values (for the GB, ofc)
@@ -36,7 +35,6 @@ func GetInitializedRegisters() *Registers {
 	r.L = 0x4D
 	r.PC = 0x100
 	r.SP = 0xE000
-	r.Stack = make([]byte, 0)
 	r.ZF = false
 	r.NF = false
 	r.HF = false
@@ -46,8 +44,8 @@ func GetInitializedRegisters() *Registers {
 
 func (r *Registers) String() string {
 	return fmt.Sprintf(
-		"A: %X\nF: %X\nB: %X\nC: %X\nD: %X\nE: %X\nH: %X\nL: %X\nPC: %X\nSP: %X\n",
-		r.A, r.F, r.B, r.C, r.D, r.E, r.H, r.L, r.PC, r.SP,
+		"A: %X\nF: %X\nB: %X\nC: %X\nD: %X\nE: %X\nH: %X\nL: %X\nPC: %X\nSP: %X\nZF: %t\nNF: %t\nHF: %t\nCF: %t\n",
+		r.A, r.F, r.B, r.C, r.D, r.E, r.H, r.L, r.PC, r.SP, r.ZF, r.NF, r.HF, r.CF,
 	)
 }
 

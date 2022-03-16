@@ -2,13 +2,15 @@ package main
 
 import (
 	"fmt"
-	"github.com/hajimehoshi/ebiten/v2"
 	game2 "go-boy/internal/game"
+	"go-boy/internal/gpu"
 	"go-boy/internal/memory"
 	"go-boy/internal/registers"
 	"log"
 	"os"
 	"runtime"
+
+	"github.com/hajimehoshi/ebiten/v2"
 )
 
 func init() {
@@ -16,7 +18,8 @@ func init() {
 }
 
 func main() {
-	file, err := os.Open("/home/gerard/Downloads/Tetris.gb")
+	filename := os.Args[1]
+	file, err := os.Open(filename)
 	if err != nil {
 		panic(err)
 	}
@@ -44,8 +47,10 @@ func main() {
 	}
 
 	game := &game2.Game{
-		R: registers.GetInitializedRegisters(),
-		M: memory.GetInitializedMemory(file),
+		R:     registers.GetInitializedRegisters(),
+		M:     memory.GetInitializedMemory(file),
+		GPU:   gpu.InitGPU(),
+		Pause: false,
 	}
 	if err = file.Close(); err != nil {
 		panic(err)
