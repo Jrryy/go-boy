@@ -51,6 +51,7 @@ func main() {
 		M:     memory.GetInitializedMemory(file),
 		GPU:   gpu.InitGPU(),
 		Pause: false,
+		Debug: false,
 	}
 	if err = file.Close(); err != nil {
 		panic(err)

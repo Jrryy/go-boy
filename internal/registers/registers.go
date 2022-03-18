@@ -13,7 +13,7 @@ type Registers struct {
 	E  byte
 	H  byte
 	L  byte
-	PC uint16 // It's not really a 64 bit integer but to read bytes from the game file we need it like this
+	PC uint16
 	SP uint16
 	ZF bool
 	NF bool
