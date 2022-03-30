@@ -7,6 +7,8 @@ import (
 	"go-boy/internal/utils"
 )
 
+var flagsRecovered bool = false
+
 func unimplemented(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
 	return fmt.Errorf("unimplemented instruction reached at PC=%04X: %02X %02X", r.PC, args[0], args[1]), 0
 }
@@ -1100,6 +1102,7 @@ func ldhAn(r *registers.Registers, m *memory.Memory, args []byte) (error, uint16
 // 0xF1
 // Pops AF.
 func popAF(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	flagsRecovered = true
 	af := utils.PopStackShort(r, m)
 	r.A = byte(af >> 8)
 	r.F = byte(af)
@@ -1845,22 +1848,26 @@ func Execute(r *registers.Registers, m *memory.Memory, instructionArray []byte) 
 	cycles := cyclesTable[opCode]
 	// Execute the operation
 	err, jump := operation(r, m, instructionArray)
-	var f8 byte = 0x00
-	var f7 byte = 0x00
-	var f6 byte = 0x00
-	var f5 byte = 0x00
-	if r.ZF {
-		f8 = 0x80
+	if !flagsRecovered {
+		var f8 byte = 0x00
+		var f7 byte = 0x00
+		var f6 byte = 0x00
+		var f5 byte = 0x00
+		if r.ZF {
+			f8 = 0x80
+		}
+		if r.NF {
+			f7 = 0x40
+		}
+		if r.HF {
+			f6 = 0x20
+		}
+		if r.CF {
+			f5 = 0x10
+		}
+		r.F = f8 + f7 + f6 + f5
+	} else {
+		flagsRecovered = false
 	}
-	if r.NF {
-		f7 = 0x40
-	}
-	if r.HF {
-		f6 = 0x20
-	}
-	if r.CF {
-		f5 = 0x10
-	}
-	r.F = f8 + f7 + f6 + f5
 	return err, jump, cycles
 }

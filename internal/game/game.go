@@ -22,6 +22,11 @@ var cyclesPerFrame = 4194304 / 60
 var cyclesPerDivUpdate = cyclesPerFrame / (16384 / 60)
 var gameFont font.Face
 
+var color00 = color.RGBA{0xE0, 0xF8, 0xCF, 0xFF}
+var color01 = color.RGBA{0x86, 0xC0, 0x6C, 0xFF}
+var color10 = color.RGBA{0x30, 0x68, 0x50, 0xFF}
+var color11 = color.RGBA{0x07, 0x18, 0x21, 0xFF}
+
 type Game struct {
 	R     *registers.Registers
 	M     *memory.Memory
@@ -86,16 +91,51 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	screen.Fill(color.White)
 
-	// lcdc := g.M.Read(0xFF40)
+	lcdc := g.M.Read(0xFF40)
 	// scx := g.M.Read(0xFF42)
 	// scy := g.M.Read(0xFF43)
 
-	tileMapAddr := uint16(0x9800)
+	g.transferOAM()
+
+	if lcdc&0x01 == 1 {
+		g.drawBackground(screen, lcdc)
+
+		if lcdc&0x02 != 0 {
+			g.drawSprites(screen, lcdc)
+		}
+	}
+
+	g.debugMemory(screen)
+}
+
+func (g *Game) transferOAM() {
+	address := uint16(g.M.Read(0xFF46)) << 8
+
+	for i := 0; i < 0xA0; i++ {
+		g.M.OAM[i] = g.M.Read(address + uint16(i))
+	}
+}
+
+func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
+	var tileMapAddr, tileDataAddr uint16
+
+	if lcdc&0x08 == 0 {
+		tileMapAddr = 0x9800
+	} else {
+		tileMapAddr = 0x9C00
+	}
+
+	if lcdc&0x10 == 0 {
+		tileDataAddr = 0x8800
+	} else {
+		tileDataAddr = 0x8000
+	}
+
 	for y := 0; y < 18; y++ {
 		for x := 0; x < 20; x++ {
 
 			tileNumber := g.M.Read(tileMapAddr)
-			tileAddr := 0x8000 + uint16(tileNumber)*16
+			tileAddr := tileDataAddr + uint16(tileNumber)*16
 			// fmt.Printf("%04X ", tileAddr)
 
 			for i := 0; i < 8; i++ {
@@ -112,13 +152,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 					var pixelColor color.Color
 					switch pair {
 					case "00":
-						pixelColor = color.RGBA{0xE0, 0xF8, 0xCF, 0xFF}
+						pixelColor = color00
 					case "01":
-						pixelColor = color.RGBA{0x86, 0xC0, 0x6C, 0xFF}
+						pixelColor = color01
 					case "10":
-						pixelColor = color.RGBA{0x30, 0x68, 0x50, 0xFF}
+						pixelColor = color10
 					case "11":
-						pixelColor = color.RGBA{0x07, 0x18, 0x21, 0xFF}
+						pixelColor = color11
 					}
 					screen.Set(200+8*x+j, 8*y+i, pixelColor)
 				}
@@ -127,10 +167,68 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 		tileMapAddr += 12
 	}
+}
 
+func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
+	var height int
+
+	if lcdc&0x04 == 0 {
+		height = 1
+	} else {
+		height = 2
+	}
+
+	var finalSpriteAddr uint16 = 0xFE9C
+
+	for nSprite := uint16(0); nSprite < 40; nSprite++ {
+		yPosition := int(g.M.Read(finalSpriteAddr - 4*nSprite))
+		xPosition := int(g.M.Read(finalSpriteAddr - 4*nSprite + 1))
+		patternNumber := g.M.Read(finalSpriteAddr - 4*nSprite + 2)
+		if height == 2 {
+			patternNumber &= 0xFE
+		}
+		flags := g.M.Read(finalSpriteAddr - 4*nSprite + 3)
+		priority := flags&0x80 == 0
+		tileAddr := 0x8000 + uint16(patternNumber)*16
+
+		for i := 0; i < 8*height; i++ {
+			tileLineUp := g.M.Read(tileAddr)
+			tileAddr++
+			tileLineDown := g.M.Read(tileAddr)
+			tileAddr++
+
+			binaryTileLineUp := fmt.Sprintf("%08b", tileLineUp)
+			binaryTileLineDown := fmt.Sprintf("%08b", tileLineDown)
+
+			for j := 0; j < 8; j++ {
+				// Check the pixel is on screen
+				if xPosition+j >= 8 && xPosition+j < 168 && yPosition+i >= 16 && yPosition+i < 160 {
+					// Check that the sprite either has priority or is on a 00 pixel.
+					if priority || screen.At(200+xPosition+j-8, yPosition+i-16) == color00 {
+						pair := string(binaryTileLineDown[j]) + string(binaryTileLineUp[j])
+						var pixelColor color.Color
+						switch pair {
+						case "00":
+							pixelColor = color00
+						case "01":
+							pixelColor = color01
+						case "10":
+							pixelColor = color10
+						case "11":
+							pixelColor = color11
+						}
+						screen.Set(200+xPosition+j-8, yPosition+i-16, pixelColor)
+					}
+				}
+			}
+		}
+	}
+}
+
+func (g *Game) debugMemory(screen *ebiten.Image) {
 	bytesToWrite := ""
-	current := 0xFF00
-	for current <= 0xFFFF {
+	current := 0xFE00
+	for current <= 0xFEA0 {
 		endLine := current + 0x07
 		for current <= endLine {
 			bytesToWrite += fmt.Sprintf("%02X ", g.M.Read(uint16(current)))
