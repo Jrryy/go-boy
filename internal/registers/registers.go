@@ -4,42 +4,47 @@ import (
 	"fmt"
 )
 
+// Registers in a GB CPU. Flags are represented as booleans too so that it's easier to use them as such.
 type Registers struct {
-	A  byte
-	F  byte
-	B  byte
-	C  byte
-	D  byte
-	E  byte
-	H  byte
-	L  byte
-	PC uint16
-	SP uint16
-	ZF bool
-	NF bool
-	HF bool
-	CF bool
+	A      byte
+	F      byte
+	B      byte
+	C      byte
+	D      byte
+	E      byte
+	H      byte
+	L      byte
+	PC     uint16
+	SP     uint16
+	ZF     bool
+	NF     bool
+	HF     bool
+	CF     bool
+	Halted bool
 }
 
 // GetInitializedRegisters initializes a new set of registers to their zero values (for the GB, ofc)
 // after the checks that the GB is supposed to perform.
 func GetInitializedRegisters() *Registers {
-	r := new(Registers)
-	r.A = 0x01
-	r.F = 0xB0
-	r.B = 0x00
-	r.C = 0x13
-	r.D = 0x00
-	r.E = 0xD8
-	r.H = 0x01
-	r.L = 0x4D
-	r.PC = 0x100
-	r.SP = 0xE000
-	r.ZF = false
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return r
+	r := Registers{
+		A:      0x01,
+		F:      0xB0,
+		B:      0x00,
+		C:      0x13,
+		D:      0x00,
+		E:      0xD8,
+		H:      0x01,
+		L:      0x4D,
+		PC:     0x100,
+		SP:     0xE000,
+		ZF:     false,
+		NF:     false,
+		HF:     false,
+		CF:     false,
+		Halted: false,
+	}
+
+	return &r
 }
 
 func (r *Registers) String() string {

@@ -9,6 +9,117 @@ import (
 
 var flagsRecovered bool = false
 
+// Generic 8 bit add function.
+func add(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*nf = false
+	*hf = *r&0x0F+op&0x0F > 0x0F
+	*cf = uint16(*r)+uint16(op) > 0x00FF
+	*r += op
+	*zf = *r == 0
+	return nil, 1
+}
+
+// Generic 16 bit add function.
+func add16(op1, op2 uint16, rh, rl *byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*nf = false
+	*hf = op1&0xFFF+op2&0xFFF > 0xFFF
+	newHL := uint32(op1) + uint32(op2)
+	*cf = newHL > 0xFFFF
+	*rh = byte(newHL >> 8)
+	*rl = byte(newHL)
+	return nil, 1
+}
+
+// Generic 8 bit add with carry function.
+func adc(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*nf = false
+	var carry byte
+	if *cf {
+		carry = 1
+	} else {
+		carry = 0
+	}
+	*hf = *r&0x0F+op&0x0F+carry > 0x0F
+	*cf = uint16(*r)+uint16(op)+uint16(carry) > 0x00FF
+	*r += op + carry
+	*zf = *r == 0
+	return nil, 1
+}
+
+// Generic subtract function.
+func sub(r *byte, op byte, nf, zf, hf, cf *bool, immediate bool) (error, uint16) {
+	*nf = true
+	*cf = op > *r
+	*hf = op&0x0F > *r&0x0F
+	*r -= op
+	*zf = *r == 0
+	if immediate {
+		return nil, 2
+	} else {
+		return nil, 1
+	}
+}
+
+// Generic 8 bit load function.
+func ld(r *byte, n byte, immediate bool) (error, uint16) {
+	*r = n
+	if immediate {
+		return nil, 2
+	} else {
+		return nil, 1
+	}
+}
+
+// Generic 16 bit load function.
+func ld16(rh, rl *byte, n uint16, immediate bool) (error, uint16) {
+	*rh = byte(n >> 8)
+	*rl = byte(n)
+	if !immediate {
+		return nil, 1
+	} else {
+		return nil, 3
+	}
+}
+
+// Generic or function.
+func or(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*r |= op
+	*zf = *r == 0
+	*nf = false
+	*hf = false
+	*cf = false
+	return nil, 1
+}
+
+// Generic and function.
+func and(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*r &= op
+	*zf = *r == 0
+	*nf = false
+	*hf = true
+	*cf = false
+	return nil, 1
+}
+
+// Generic xor function.
+func xor(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*r ^= op
+	*zf = *r == 0
+	*nf = false
+	*hf = false
+	*cf = false
+	return nil, 1
+}
+
+// Generic compare function.
+func cp(op1, op2 byte, nf, zf, hf, cf *bool) (error, uint16) {
+	*nf = true
+	*cf = op2 > op1
+	*hf = op2&0x0F > op1&0x0F
+	*zf = op1-op2 == 0
+	return nil, 1
+}
+
 func unimplemented(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
 	return fmt.Errorf("unimplemented instruction reached at PC=%04X: %02X %02X", r.PC, args[0], args[1]), 0
 }
@@ -22,9 +133,14 @@ func nop(_ *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0x01
 // Loads two bytes immediate into BC
 func ldBCnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
-	r.B = args[2]
-	r.C = args[1]
-	return nil, 3
+	return ld16(&r.B, &r.C, uint16(args[2])<<8+uint16(args[1]), true)
+}
+
+// 0x02
+// Copy A to memory address pointed by BC
+func ldBCA(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.BC(), r.A)
+	return nil, 1
 }
 
 // 0x03
@@ -59,8 +175,7 @@ func decB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0x06
 // Loads an 8 bit int into B
 func ldBn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
-	r.B = args[1]
-	return nil, 2
+	return ld(&r.B, args[1], true)
 }
 
 // 0x07
@@ -87,22 +202,13 @@ func ldnnSP(r *registers.Registers, m *memory.Memory, args []byte) (error, uint1
 // 0x09
 // Adds HL to BC, result to HL.
 func addHLBC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	bc := r.BC()
-	hl := r.HL()
-	r.HF = bc&0xFFF+hl&0xFFF > 0xFFF
-	newHL := uint32(bc) + uint32(hl)
-	r.CF = newHL > 0xFFFF
-	r.H = byte(newHL >> 8)
-	r.L = byte(newHL)
-	return nil, 1
+	return add16(r.BC(), r.HL(), &r.H, &r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x0A
 // Loads A from address pointed to by BC
 func ldABC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.A = m.Read(r.BC())
-	return nil, 1
+	return ld(&r.A, m.Read(r.BC()), false)
 }
 
 // 0x0B
@@ -137,8 +243,7 @@ func decC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0x0E
 // Loads an 8 bit int into C
 func ldCn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
-	r.C = args[1]
-	return nil, 2
+	return ld(&r.C, args[1], true)
 }
 
 // 0x11
@@ -150,7 +255,7 @@ func ldDEnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint1
 }
 
 // 0x12
-// Copy a to memory address pointed by DE
+// Copy A to memory address pointed by DE
 func ldDEA(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 	m.Store(r.DE(), r.A)
 	return nil, 1
@@ -188,8 +293,7 @@ func decD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0x16
 // Load an 8 bit int into D
 func ldDn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
-	r.D = args[1]
-	return nil, 2
+	return ld(&r.D, args[1], true)
 }
 
 // 0x17
@@ -217,21 +321,22 @@ func jrn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) 
 // 0x19
 // Adds DE to HL. Stores the result in HL.
 func addHLDE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	de := r.DE()
-	hl := r.HL()
-	r.HF = de&0xFFF+hl&0xFFF > 0xFFF
-	newHL := uint32(de) + uint32(hl)
-	r.CF = newHL > 0xFFFF
-	r.H = byte(newHL >> 8)
-	r.L = byte(newHL)
-	return nil, 1
+	return add16(r.DE(), r.HL(), &r.H, &r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x1A
 // Saves byte in memory address pointed by DE in A.
 func ldADE(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 	r.A = m.Read(r.DE())
+	return nil, 1
+}
+
+// 0x1B
+// Decrements the value in DE
+func decDE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	de := r.DE() - 1
+	r.D = byte(de >> 8)
+	r.E = byte(de)
 	return nil, 1
 }
 
@@ -258,8 +363,7 @@ func decE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0x1E
 // Load an 8 bit int into E
 func ldEn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
-	r.E = args[1]
-	return nil, 2
+	return ld(&r.E, args[1], true)
 }
 
 // 0x1F
@@ -323,6 +427,39 @@ func decH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 	return nil, 1
 }
 
+// 0x26
+// Load an 8 bit int into H
+func ldHn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
+	return ld(&r.H, args[1], true)
+}
+
+// 0x27
+// Decimal adjust after addition.
+func daa(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	a := uint16(r.A)
+	if !r.NF {
+		if a&0x0F > 9 || r.HF {
+			a += 6
+		}
+		if a > 0x9F || r.CF {
+			a += 0x60
+		}
+	} else {
+		if r.HF {
+			a -= 6
+			a &= 0xFF
+		}
+		if r.CF {
+			a -= 0x60
+		}
+	}
+	r.HF = false
+	r.ZF = a == 0
+	r.CF = a >= 0x100
+	r.A = byte(a)
+	return nil, 1
+}
+
 // 0x28
 // If ZF is set, add to PC and jump
 func jrZn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
@@ -333,15 +470,9 @@ func jrZn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16)
 }
 
 // 0x29
-// Adds HL to HL. Basically HL*2.
-func addHL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	hl := r.HL()
-	r.HF = (hl&0xFFF)<<1 > 0xFFF
-	r.CF = uint32(hl)<<1 > 0xFFFF
-	r.H = byte((hl << 1) >> 8)
-	r.L = byte(hl << 1)
-	return nil, 1
+// Adds HL to HL.
+func addHLHL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return add16(r.HL(), r.HL(), &r.H, &r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x2A
@@ -380,6 +511,12 @@ func decL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 	r.L--
 	r.ZF = r.L == 0
 	return nil, 1
+}
+
+// 0x2E
+// Load an 8 bit int into L
+func ldLn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
+	return ld(&r.L, args[1], true)
 }
 
 // 0x2F
@@ -500,140 +637,289 @@ func ldAn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16)
 // 0x40
 // Copies B to B.
 func ldBB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return nil, 1
+	return ld(&r.B, r.B, false)
 }
 
 // 0x41
 // Copies C to B.
 func ldBC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.B = r.C
-	return nil, 1
+	return ld(&r.B, r.C, false)
+}
+
+// 0x42
+// Copies D to B.
+func ldBD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.B, r.D, false)
+}
+
+// 0x43
+// Copies D to B.
+func ldBE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.B, r.E, false)
+}
+
+// 0x44
+// Copies H to B.
+func ldBH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.B, r.H, false)
+}
+
+// 0x45
+// Copies D to B.
+func ldBL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.B, r.L, false)
 }
 
 // 0x46
-// Copies contents of memory address HL into B
+// Copies contents of memory address HL into B.
 func ldBHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.B = m.Read(r.HL())
-	return nil, 1
+	return ld(&r.B, m.Read(r.HL()), false)
 }
 
 // 0x47
-// Copies A to B
+// Copies A to B.
 func ldBA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.B = r.A
-	return nil, 1
+	return ld(&r.B, r.A, false)
+}
+
+// 0x48
+// Copies B to C.
+func ldCB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.B, false)
+}
+
+// 0x49
+// Copies C to C.
+func ldCC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.C, false)
+}
+
+// 0x4A
+// Copies D to C.
+func ldCD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.D, false)
+}
+
+// 0x4B
+// Copies D to C.
+func ldCE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.E, false)
+}
+
+// 0x4C
+// Copies H to C.
+func ldCH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.H, false)
+}
+
+// 0x4D
+// Copies D to C.
+func ldCL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.C, r.L, false)
 }
 
 // 0x4E
 // Copies contents of memory address HL into C
 func ldCHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.C = m.Read(r.HL())
-	return nil, 1
+	return ld(&r.C, m.Read(r.HL()), false)
 }
 
 // 0x4F
 // Copies A to C
 func ldCA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.C = r.A
-	return nil, 1
+	return ld(&r.C, r.A, false)
+}
+
+// 0x50
+// Copies B to D
+func ldDB(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.D, r.B, false)
+}
+
+// 0x51
+// Copies C to D
+func ldDC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.D, r.C, false)
+}
+
+// 0x52
+// Copies D to D
+func ldDD(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.D, r.D, false)
+}
+
+// 0x53
+// Copies E to D
+func ldDE(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.D, r.E, false)
 }
 
 // 0x54
 // Copies H to D
 func ldDH(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.D = r.H
-	return nil, 1
+	return ld(&r.D, r.H, false)
+}
+
+// 0x55
+// Copies L to D
+func ldDL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.D, r.L, false)
 }
 
 // 0x56
 // Copies the contents in memory address HL to D
 func ldDHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.D = m.Read(r.HL())
-	return nil, 1
+	return ld(&r.D, m.Read(r.HL()), false)
 }
 
 // 0x57
 // Copies A to D
 func ldDA(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.D = r.A
-	return nil, 1
+	return ld(&r.D, r.A, false)
+}
+
+// 0x58
+// Copies B to E
+func ldEB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.E, r.B, false)
+}
+
+// 0x59
+// Copies C to E
+func ldEC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.E, r.C, false)
+}
+
+// 0x5A
+// Copies D to E
+func ldED(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.E, r.D, false)
+}
+
+// 0x5B
+// Copies E to E
+func ldEE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.E, r.E, false)
+}
+
+// 0x5C
+// Copies H to E
+func ldEH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.E, r.H, false)
 }
 
 // 0x5D
 // Copies L to E
 func ldEL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.E = r.L
-	return nil, 1
+	return ld(&r.E, r.L, false)
 }
 
 // 0x5E
 // Copies the contents in memory address HL to E
 func ldEHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.E = m.Read(r.HL())
-	return nil, 1
+	return ld(&r.E, m.Read(r.HL()), false)
 }
 
 // 0x5F
 // Copies A to E
 func ldEA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.E = r.A
-	return nil, 1
+	return ld(&r.E, r.A, false)
 }
 
 // 0x60
 // Copies B to H
 func ldHB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.H = r.B
-	return nil, 1
+	return ld(&r.H, r.B, false)
+}
+
+// 0x61
+// Copies C to H
+func ldHC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.H, r.C, false)
 }
 
 // 0x62
 // Copies D to H
 func ldHD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.H = r.D
-	return nil, 1
+	return ld(&r.H, r.D, false)
+}
+
+// 0x63
+// Copies E to H
+func ldHE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.H, r.E, false)
+}
+
+// 0x64
+// Copies H to H
+func ldHH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.H, r.H, false)
+}
+
+// 0x65
+// Copies L to H
+func ldHL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.H, r.L, false)
 }
 
 // 0x66
 // Copies value in memory address HL to H
 func ldHHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.H = m.Read(r.HL())
-	return nil, 1
+	return ld(&r.H, m.Read(r.HL()), false)
 }
 
 // 0x67
 // Copies A to H
 func ldHA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.H = r.A
-	return nil, 1
+	return ld(&r.H, r.A, false)
 }
 
 // 0x68
 // Copies B to L
 func ldLB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.L = r.B
-	return nil, 1
+	return ld(&r.L, r.B, false)
 }
 
 // 0x69
 // Copies C to L
 func ldLC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.L = r.C
-	return nil, 1
+	return ld(&r.L, r.C, false)
+}
+
+// 0x6A
+// Copies D to L
+func ldLD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.L, r.D, false)
 }
 
 // 0x6B
 // Copies E to L
 func ldLE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.L = r.E
-	return nil, 1
+	return ld(&r.L, r.E, false)
+}
+
+// 0x6C
+// Copies H to L
+func ldLH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.L, r.H, false)
+}
+
+// 0x6D
+// Copies L to L
+func ldLL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.L, r.L, false)
+}
+
+// 0x6E
+// Copies value in memory address HL to L
+func ldLHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return ld(&r.L, m.Read(r.HL()), false)
 }
 
 // 0x6F
 // Copies A to L
 func ldLA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.L = r.A
-	return nil, 1
+	return ld(&r.L, r.A, false)
 }
 
 // 0x71
@@ -654,6 +940,13 @@ func ldHLD(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 // Stores the contents of E into the memory address HL.
 func ldHLE(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 	m.Store(r.HL(), r.E)
+	return nil, 1
+}
+
+// 0x76
+// Stop CPU until interruption occurs
+func halt(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	r.Halted = true
 	return nil, 1
 }
 
@@ -716,160 +1009,331 @@ func ldAHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 // 0x80
 // Adds A + B, result to A.
 func addAB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	r.HF = r.A&0x0F+r.B&0x0F > 0x0F
-	r.CF = uint16(r.A)+uint16(r.B) > 0x00FF
-	r.A = r.A + r.B
-	r.ZF = r.A == 0
-	return nil, 1
+	return add(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x81
+// Adds A + C, result to A.
+func addAC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return add(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x82
 // Adds A + D, result to A.
 func addAD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	r.HF = r.A&0x0F+r.D&0x0F > 0x0F
-	r.CF = uint16(r.A)+uint16(r.D) > 0x00FF
-	r.A = r.A + r.D
-	r.ZF = r.A == 0
-	return nil, 1
+	return add(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x83
+// Adds A + E, result to A.
+func addAE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return add(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x84
+// Adds A + H, result to A.
+func addAH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return add(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x85
 // Adds A + L, result to A.
 func addAL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	r.HF = r.A&0x0F+r.L&0x0F > 0x0F
-	r.CF = uint16(r.A)+uint16(r.L) > 0x00FF
-	r.A = r.A + r.L
-	r.ZF = r.A == 0
-	return nil, 1
+	return add(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x86
+// Adds A + value pointed at by HL, result to A.
+func addAHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return add(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x87
 // Adds A + A.
 func addAA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	r.HF = r.A&0x0F+r.A&0x0F > 0x0F
-	r.CF = uint16(r.A)+uint16(r.A) > 0x00FF
-	r.A = r.A + r.A
-	r.ZF = r.A == 0
-	return nil, 1
+	return add(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x88
+// Adds B + carry to A.
+func adcAB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x89
+// Adds C + carry to A.
+func adcAC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0x8A
 // Adds D + carry to A.
 func adcAD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	var carry byte
-	if r.CF {
-		carry = 1
-	} else {
-		carry = 0
-	}
-	r.HF = r.A&0x0F+r.D&0x0F+carry > 0x0F
-	r.CF = uint16(r.A)+uint16(r.D)+uint16(carry) > 0x00FF
-	r.A = r.A + r.D + carry
-	r.ZF = r.A == 0
-	return nil, 1
+	return adc(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x8B
+// Adds E + carry to A.
+func adcAE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x8C
+// Adds H + carry to A.
+func adcAH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x8D
+// Adds L + carry to A.
+func adcAL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x8E
+// Adds value in memory pointed at by HL + carry to A.
+func adcAHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x8F
+// Adds A + carry to A.
+func adcAA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return adc(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0x90
+// Subtracts B from A, result to A.
+func subAB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x91
+// Subtracts C from A, result to A.
+func subAC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x92
+// Subtracts D from A, result to A.
+func subAD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0x93
 // Subtracts E from A, result to A.
 func subAE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = true
-	r.CF = r.E > r.A
-	r.HF = r.E&0x0F > r.A&0x0F
-	r.A -= r.E
-	r.ZF = r.A == 0
-	return nil, 1
+	return sub(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x94
+// Subtracts H from A, result to A.
+func subAH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x95
+// Subtracts L from A, result to A.
+func subAL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x96
+// Subtracts value in memory address HL from A, result to A.
+func subAHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0x97
+// Subtracts A from A, result to A.
+func subAA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sub(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF, false)
+}
+
+// 0xA0
+// Performs AND of A against B, result to A.
+func andB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xA1
 // Performs AND of A against C, result to A.
 func andC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A &= r.C
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = true
-	r.CF = false
-	return nil, 1
+	return and(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA2
+// Performs AND of A against D, result to A.
+func andD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA3
+// Performs AND of A against E, result to A.
+func andE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA4
+// Performs AND of A against H, result to A.
+func andH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA5
+// Performs AND of A against L, result to A.
+func andL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA6
+// Performs AND of A against value in memory address HL, result to A.
+func andHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return and(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xA7
 // Performs AND of A against itself.
 func andA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A &= r.A
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = true
-	r.CF = false
-	return nil, 1
+	return and(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xA8
+// Performs an XOR of the register B against A, result to A.
+func xorB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xA9
 // Performs an XOR of the register C against A, result to A.
 func xorC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A ^= r.C
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return nil, 1
+	return xor(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xAA
+// Performs an XOR of the register D against A, result to A.
+func xorD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xAB
+// Performs an XOR of the register E against A, result to A.
+func xorE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xAC
+// Performs an XOR of the register H against A, result to A.
+func xorH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xAD
+// Performs an XOR of the register L against A, result to A.
+func xorL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xAE
+// Performs an XOR of the value in memory address HL against A, result to A.
+func xorHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return xor(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xAF
-// Performs an XOR of the register A against itself. To simplify, I just set A as 0.
+// Performs an XOR of the register A against itself.
 func xorA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A = 0
-	r.ZF = true
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return nil, 1
+	return xor(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xB0
 // Performs an OR of B against A, stores result in A.
 func orB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A |= r.B
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return nil, 1
+	return or(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xB1
 // Performs an OR of C against A, stores result in A.
 func orC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A |= r.C
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return nil, 1
+	return or(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB2
+// Performs an OR of D against A, stores result in A.
+func orD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return or(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB3
+// Performs an OR of E against A, stores result in A.
+func orE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return or(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB4
+// Performs an OR of H against A, stores result in A.
+func orH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return or(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB5
+// Performs an OR of L against A, stores result in A.
+func orL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return or(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xB6
 // Performs an OR of memory address HL against A, stores result in A.
 func orHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.A |= m.Read(r.HL())
-	r.ZF = r.A == 0
-	r.NF = false
-	r.HF = false
-	r.CF = false
-	return nil, 1
+	return or(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB7
+// Performs an OR of A against A, stores result in A.
+func orA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return or(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xB8
+// Compares B against A.
+func cpB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xB9
 // Compares C against A.
 func cpC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = true
-	r.CF = r.C > r.A
-	r.HF = r.C&0x0F > r.A&0x0F
-	r.ZF = r.A-r.C == 0
-	return nil, 1
+	return cp(r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xBA
+// Compares D against A.
+func cpD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xBB
+// Compares E against A.
+func cpE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xBC
+// Compares H against A.
+func cpH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xBD
+// Compares L against A.
+func cpL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+}
+
+// 0xBE
+// Compares value pointed at by HL against A.
+func cpHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return cp(r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
 }
 
 // 0xBF
@@ -916,6 +1380,18 @@ func jpNZnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint1
 func jpnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
 	r.PC = uint16(args[1]) + uint16(args[2])<<8
 	return nil, 0 // Return 0 because it's a jump
+}
+
+// 0xC4
+// Calls a function if ZF is reset.
+func callNZnn(r *registers.Registers, m *memory.Memory, args []byte) (error, uint16) {
+	if !r.ZF {
+		utils.PushStackShort(r, m, r.PC+3)
+		r.PC = uint16(args[1]) + uint16(args[2])<<8
+		return nil, 0
+	} else {
+		return nil, 3
+	}
 }
 
 // 0xC5
@@ -995,6 +1471,24 @@ func adcAn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16
 	return nil, 2
 }
 
+// 0xCF
+// Calls routine at 0x0008
+func rst08(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	utils.PushStackShort(r, m, r.PC+1)
+	r.PC = 0x0008
+	return nil, 0
+}
+
+// 0xD0
+// Returns if CF is reset.
+func retNC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	if !r.CF {
+		r.PC = utils.PopStackShort(r, m)
+		return nil, 0
+	}
+	return nil, 1
+}
+
 // 0xD1
 // Pops DE.
 func popDE(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
@@ -1018,6 +1512,22 @@ func jpNCnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint1
 // Pushes DE into the stack.
 func pushDE(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 	utils.PushStackShort(r, m, r.DE())
+	return nil, 1
+}
+
+// 0xD6
+// Subtracts 8 bit immediate from A.
+func subAn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
+	return sub(&r.A, args[1], &r.NF, &r.ZF, &r.HF, &r.CF, true)
+}
+
+// 0xD8
+// Returns if CF is set.
+func retC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	if r.CF {
+		r.PC = utils.PopStackShort(r, m)
+		return nil, 0
+	}
 	return nil, 1
 }
 
@@ -1172,7 +1682,7 @@ func rst38(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16){
 	nop, // 0x00
 	ldBCnn,
-	unimplemented,
+	ldBCA,
 	incBC,
 	incB,
 	decB,
@@ -1197,7 +1707,7 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	jrn,
 	addHLDE,
 	ldADE,
-	unimplemented,
+	decDE,
 	incE,
 	decE,
 	ldEn,
@@ -1208,15 +1718,15 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	incHL,
 	unimplemented,
 	decH,
-	unimplemented,
-	unimplemented,
+	ldHn,
+	daa,
 	jrZn,
-	addHL,
+	addHLHL,
 	ldiAHL,
 	decHL,
 	incL,
 	decL,
-	unimplemented,
+	ldLn,
 	cpl,
 	jrNCn, // 0x30
 	ldSPnn,
@@ -1236,51 +1746,51 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	ldBB, // 0x40
 	ldBC,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldBD,
+	ldBE,
+	ldBH,
+	ldBL,
 	ldBHL,
 	ldBA,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldCB,
+	ldCC,
+	ldCD,
+	ldCE,
+	ldCH,
+	ldCL,
 	ldCHL,
 	ldCA,
-	unimplemented, // 0x50
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldDB, // 0x50
+	ldDC,
+	ldDD,
+	ldDE,
 	ldDH,
-	unimplemented,
+	ldDL,
 	ldDHL,
 	ldDA,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldEB,
+	ldEC,
+	ldED,
+	ldEE,
+	ldEH,
 	ldEL,
 	ldEHL,
 	ldEA,
 	ldHB, // 0x60
-	unimplemented,
+	ldHC,
 	ldHD,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldHE,
+	ldHH,
+	ldHL,
 	ldHHL,
 	ldHA,
 	ldLB,
 	ldLC,
-	unimplemented,
+	ldLD,
 	ldLE,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	ldLH,
+	ldLL,
+	ldLHL,
 	ldLA,
 	unimplemented, // 0x70
 	ldHLC,
@@ -1288,7 +1798,7 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	ldHLE,
 	unimplemented,
 	unimplemented,
-	unimplemented,
+	halt,
 	ldHLA,
 	ldAB,
 	ldAC,
@@ -1299,25 +1809,29 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	ldAHL,
 	unimplemented,
 	addAB, // 0x80
-	unimplemented,
+	addAC,
 	addAD,
-	unimplemented,
-	unimplemented,
+	addAE,
+	addAH,
 	addAL,
-	unimplemented,
+	addAHL,
 	addAA,
-	unimplemented,
-	unimplemented,
+	adcAB,
+	adcAC,
 	adcAD,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0x90
-	unimplemented,
-	unimplemented,
+	adcAE,
+	adcAH,
+	adcAL,
+	adcAHL,
+	adcAA,
+	subAB, // 0x90
+	subAC,
+	subAD,
 	subAE,
+	subAH,
+	subAL,
+	subAHL,
+	subAA,
 	unimplemented,
 	unimplemented,
 	unimplemented,
@@ -1326,47 +1840,43 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xA0
+	andB, // 0xA0
 	andC,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	andD,
+	andE,
+	andH,
+	andL,
+	andHL,
 	andA,
-	unimplemented,
+	xorB,
 	xorC,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	xorD,
+	xorE,
+	xorH,
+	xorL,
+	xorHL,
 	xorA,
 	orB, // 0xB0
 	orC,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	orD,
+	orE,
+	orH,
+	orL,
 	orHL,
-	unimplemented,
-	unimplemented,
+	orA,
+	cpB,
 	cpC,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	cpD,
+	cpE,
+	cpH,
+	cpL,
+	cpHL,
 	cpA,
 	retNZ, // 0xC0
 	popBC,
 	jpNZnn,
 	jpnn,
-	unimplemented,
+	callNZnn,
 	pushBC,
 	addAn,
 	unimplemented,
@@ -1377,16 +1887,16 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	callnn,
 	adcAn,
-	unimplemented,
-	unimplemented, // 0xD0
+	rst08,
+	retNC, // 0xD0
 	popDE,
 	jpNCnn,
 	unimplemented,
 	unimplemented,
 	pushDE,
+	subAn,
 	unimplemented,
-	unimplemented,
-	unimplemented,
+	retC,
 	reti,
 	unimplemented,
 	unimplemented,
@@ -1446,6 +1956,24 @@ var cyclesTable = [256]int{
 	6, 6, 4, 2, 0, 8, 4, 8, 6, 4, 8, 2, 0, 0, 4, 8, // 0xf_
 }
 
+// Generic function for swapping nibbles.
+func swap(r *byte, zf, nf, hf, cf *bool) (error, uint16) {
+	*r = *r<<4 + *r>>4
+	*zf = *r == 0
+	*cf = false
+	*hf = false
+	*nf = false
+	return nil, 2
+}
+
+// Generic function for testing the nth bit of a register.
+func test(bit int, r byte, zf, hf, nf *bool) (error, uint16) {
+	*zf = (r>>bit)&0x01 == 0
+	*hf = true
+	*nf = false
+	return nil, 2
+}
+
 // 0xCB19
 // Rotate C right through carry flag.
 func rrC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
@@ -1472,15 +2000,60 @@ func slaA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 	return nil, 2
 }
 
-// 0xCB37
-// Swap nibbles of A.
-func swapA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A = r.A<<4 + r.A>>4
-	r.ZF = r.A == 0
+// 0xCB30
+// Swap nibbles of B.
+func swapB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.B, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB31
+// Swap nibbles of C.
+func swapC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.C, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB32
+// Swap nibbles of D.
+func swapD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.D, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB33
+// Swap nibbles of E.
+func swapE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.E, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB34
+// Swap nibbles of H.
+func swapH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.H, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB35
+// Swap nibbles of L.
+func swapL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.L, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB36
+// Swap nibbles of memory pointed at by HL.
+// Can't be generalized because of the use of memory.
+func swapHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	data := m.Read(r.HL())
+	data = data<<4 + data>>4
+	r.ZF = data == 0
 	r.CF = false
 	r.HF = false
 	r.NF = false
+	m.Store(r.HL(), data)
 	return nil, 2
+}
+
+// 0xCB37
+// Swap nibbles of A.
+func swapA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return swap(&r.A, &r.ZF, &r.NF, &r.HF, &r.CF)
 }
 
 // 0xCB38
@@ -1494,58 +2067,399 @@ func srlB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 	return nil, 2
 }
 
+// 0xCB3F
+// Shift right A into carry, MSB = 0.
+func srlA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	r.NF = false
+	r.HF = false
+	r.CF = r.A&0x01 == 1
+	r.A >>= 1
+	r.ZF = r.A == 0
+	return nil, 2
+}
+
+// 0xCB40
+// Test bit 0 of B.
+func test0B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB41
+// Test bit 0 of C.
+func test0C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB42
+// Test bit 0 of D.
+func test0D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB43
+// Test bit 0 of E.
+func test0E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB44
+// Test bit 0 of H.
+func test0H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB45
+// Test bit 0 of L.
+func test0L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB46
+// Test bit 0 of value in memory address HL.
+func test0HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB47
+// Test bit 0 of A.
+func test0A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(0, r.A, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB48
+// Test bit 1 of B.
+func test1B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB41
+// Test bit 1 of C.
+func test1C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB42
+// Test bit 1 of D.
+func test1D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB43
+// Test bit 1 of E.
+func test1E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB44
+// Test bit 1 of H.
+func test1H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB45
+// Test bit 1 of L.
+func test1L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB46
+// Test bit 1 of value in memory address HL.
+func test1HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB47
+// Test bit 1 of A.
+func test1A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(1, r.A, &r.ZF, &r.HF, &r.NF)
+}
+
 // 0xCB50
 // Test bit 2 of B.
 func test2B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (r.B>>2)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(2, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB51
+// Test bit 2 of C.
+func test2C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB52
+// Test bit 2 of D.
+func test2D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB53
+// Test bit 2 of E.
+func test2E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB54
+// Test bit 2 of H.
+func test2H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB55
+// Test bit 2 of L.
+func test2L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB56
+// Test bit 2 of value in memory address HL.
+func test2HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB57
+// Test bit 2 of A.
+func test2A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(2, r.A, &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB58
 // Test bit 3 of B.
 func test3B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (r.B>>3)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(3, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB59
+// Test bit 3 of C.
+func test3C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5A
+// Test bit 3 of D.
+func test3D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5B
+// Test bit 3 of E.
+func test3E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5C
+// Test bit 3 of H.
+func test3H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5D
+// Test bit 3 of L.
+func test3L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5E
+// Test bit 3 of value in memory address HL.
+func test3HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB5F
+// Test bit 3 of A.
+func test3A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(3, r.A, &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB60
 // Test bit 4 of B.
 func test4B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (r.B>>4)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(4, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB61
+// Test bit 4 of C.
+func test4C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB62
+// Test bit 4 of D.
+func test4D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB63
+// Test bit 4 of E.
+func test4E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB64
+// Test bit 4 of H.
+func test4H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB65
+// Test bit 4 of L.
+func test4L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB66
+// Test bit 4 of value in memory address HL.
+func test4HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB67
+// Test bit 4 of A.
+func test4A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(4, r.A, &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB68
 // Test bit 5 of B.
 func test5B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (r.B>>5)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(5, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB69
+// Test bit 5 of C.
+func test5C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6A
+// Test bit 5 of D.
+func test5D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6B
+// Test bit 5 of E.
+func test5E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6C
+// Test bit 5 of H.
+func test5H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6D
+// Test bit 5 of L.
+func test5L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6E
+// Test bit 5 of value in memory address HL.
+func test5HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB6F
+// Test bit 5 of A.
+func test5A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(5, r.A, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB70
+// Test bit 6 of B.
+func test6B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB71
+// Test bit 6 of C.
+func test6C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB72
+// Test bit 6 of D.
+func test6D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB73
+// Test bit 6 of E.
+func test6E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB74
+// Test bit 6 of H.
+func test6H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB75
+// Test bit 6 of L.
+func test6L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.L, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB76
+// Test bit 6 of value in memory address HL.
+func test6HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB77
+// Test bit 6 of A.
+func test6A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(6, r.A, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB78
+// Test bit 7 of B.
+func test7B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.B, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB79
+// Test bit 7 of C.
+func test7C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.C, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB7A
+// Test bit 7 of D.
+func test7D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.D, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB7B
+// Test bit 7 of E.
+func test7E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.E, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB7C
+// Test bit 7 of H.
+func test7H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.H, &r.ZF, &r.HF, &r.NF)
+}
+
+// 0xCB7D
+// Test bit 7 of L.
+func test7L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return test(7, r.L, &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB7E
 // Test bit 7 of value in memory address HL.
 func test7HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (m.Read(r.HL())>>7)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(3, m.Read(r.HL()), &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB7F
 // Test bit 7 of A.
 func test7A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.ZF = (r.A>>7)&0x01 == 0
-	r.HF = true
-	r.NF = false
-	return nil, 2
+	return test(7, r.A, &r.ZF, &r.HF, &r.NF)
 }
 
 // 0xCB86
@@ -1611,13 +2525,13 @@ var CBTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (err
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented, // 0x30
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	swapB, // 0x30
+	swapC,
+	swapD,
+	swapE,
+	swapH,
+	swapL,
+	swapHL,
 	swapA,
 	srlB,
 	unimplemented,
@@ -1626,69 +2540,69 @@ var CBTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (err
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented,
-	unimplemented, // 0x40
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	srlA,
+	test0B, // 0x40
+	test0C,
+	test0D,
+	test0E,
+	test0H,
+	test0L,
+	test0HL,
+	test0A,
+	test1B,
+	test1C,
+	test1D,
+	test1E,
+	test1H,
+	test1L,
+	test1HL,
+	test1A,
 	test2B, // 0x50
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	test2C,
+	test2D,
+	test2E,
+	test2H,
+	test2L,
+	test2HL,
+	test2A,
 	test3B,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	test3C,
+	test3D,
+	test3E,
+	test3H,
+	test3L,
+	test3HL,
+	test3A,
 	test4B, // 0x60
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	test4C,
+	test4D,
+	test4E,
+	test4H,
+	test4L,
+	test4HL,
+	test4A,
 	test5B,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0x70
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	test5C,
+	test5D,
+	test5E,
+	test5H,
+	test5L,
+	test5HL,
+	test5A,
+	test6B, // 0x70
+	test6C,
+	test6D,
+	test6E,
+	test6H,
+	test6L,
+	test6HL,
+	test6A,
+	test7B,
+	test7C,
+	test7D,
+	test7E,
+	test7H,
+	test7L,
 	test7HL,
 	test7A,
 	unimplemented, // 0x80

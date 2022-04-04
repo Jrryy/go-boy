@@ -18,14 +18,17 @@ import (
 	"golang.org/x/image/font/opentype"
 )
 
-var cyclesPerFrame = 4194304 / 60
+var frequency = 4194304
+var cyclesPerFrame = frequency / 60
 var cyclesPerDivUpdate = cyclesPerFrame / (16384 / 60)
+var cyclesPerTimaUpdate = [4]int{4096 / 60, 262144 / 60, 65536 / 60, 16384 / 60}
 var gameFont font.Face
 
 var color00 = color.RGBA{0xE0, 0xF8, 0xCF, 0xFF}
 var color01 = color.RGBA{0x86, 0xC0, 0x6C, 0xFF}
 var color10 = color.RGBA{0x30, 0x68, 0x50, 0xFF}
 var color11 = color.RGBA{0x07, 0x18, 0x21, 0xFF}
+var colors = [4]color.RGBA{color00, color01, color10, color11}
 
 type Game struct {
 	R     *registers.Registers
@@ -50,30 +53,54 @@ func init() {
 func (g *Game) Update() error {
 	currentCycles := 0
 	divCycles := 0
+	timaCycles := 0
 	if ebiten.IsKeyPressed(ebiten.KeySpace) {
 		g.Debug = true
 	}
 	for currentCycles < cyclesPerFrame {
 		// Joypad stuff. For now let's just consider the use is not pressing a single button.
 		g.M.Store(0xFF00, 0xCF)
-		// Read always 3 bytes: op code and 2 possible arguments
-		instructionArray := g.M.ReadInstruction(g.R.PC)
-		if g.Debug {
-			fmt.Println(runtime.FuncForPC(reflect.ValueOf(instructions.InstructionTable[instructionArray[0]]).Pointer()).Name())
-			fmt.Println(g.R)
-		}
-		// fmt.Printf("%X %X %X\n", instructionArray[0], instructionArray[1], instructionArray[2])
-		err, bytes, cycles := instructions.Execute(g.R, g.M, instructionArray)
-		if err != nil {
-			panic(err)
+		var err error
+		var bytes uint16
+		var cycles int
+		if !g.R.Halted {
+			// Read always 3 bytes: op code and 2 possible arguments
+			instructionArray := g.M.ReadInstruction(g.R.PC)
+			if g.Debug {
+				fmt.Println(runtime.FuncForPC(reflect.ValueOf(instructions.InstructionTable[instructionArray[0]]).Pointer()).Name())
+				fmt.Println(g.R)
+			}
+			// fmt.Printf("%X %X %X\n", instructionArray[0], instructionArray[1], instructionArray[2])
+			err, bytes, cycles = instructions.Execute(g.R, g.M, instructionArray)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			bytes = 0
+			cycles = 1
 		}
 		// Add cycles executed to the current cycles of the frame
 		currentCycles += cycles
-		// Check if we have to update DIV
+		// Update DIV
 		divCycles += cycles
 		if divCycles >= cyclesPerDivUpdate {
 			divCycles = 0
 			g.M.Store(0xFF04, g.M.Read(0xFF04)+1)
+		}
+		// Update TIMA
+		tac := g.M.Read(0xFF07)
+		if tac&0x04 == 0x04 {
+			timaCycles += cycles
+			if timaCycles >= cyclesPerTimaUpdate[tac&0x03] {
+				timaCycles = 0
+				currentTIMA := uint16(g.M.Read(0xFF05)) + 1
+				if currentTIMA > 0xFF {
+					if g.M.IER[0]&0x04 == 0x04 {
+						g.M.Store(0xFF0F, g.M.Read(0xFF0F)|0x04)
+					}
+					g.M.Store(0xFF05, g.M.Read(0xFF06))
+				}
+			}
 		}
 		// Augment the PC as much as the amount of bytes the instruction has used
 		g.R.PC += bytes
@@ -89,7 +116,7 @@ func (g *Game) Update() error {
 
 func (g *Game) Draw(screen *ebiten.Image) {
 
-	screen.Fill(color.White)
+	screen.Fill(color.Gray{0x77})
 
 	lcdc := g.M.Read(0xFF40)
 	// scx := g.M.Read(0xFF42)
@@ -118,6 +145,15 @@ func (g *Game) transferOAM() {
 
 func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 	var tileMapAddr, tileDataAddr uint16
+	var signed bool
+
+	bgp := g.M.Read(0xFF47)
+	bgpColors := [4]color.RGBA{
+		colors[bgp&0x03],
+		colors[bgp&0x0C>>2],
+		colors[bgp&0x30>>4],
+		colors[bgp>>6],
+	}
 
 	if lcdc&0x08 == 0 {
 		tileMapAddr = 0x9800
@@ -126,8 +162,10 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 	}
 
 	if lcdc&0x10 == 0 {
-		tileDataAddr = 0x8800
+		signed = true
+		tileDataAddr = 0x9000
 	} else {
+		signed = false
 		tileDataAddr = 0x8000
 	}
 
@@ -136,6 +174,9 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 
 			tileNumber := g.M.Read(tileMapAddr)
 			tileAddr := tileDataAddr + uint16(tileNumber)*16
+			if signed && tileNumber >= 0x7F {
+				tileAddr = (0x0800 + uint16(tileNumber)) << 4
+			}
 			// fmt.Printf("%04X ", tileAddr)
 
 			for i := 0; i < 8; i++ {
@@ -152,13 +193,13 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 					var pixelColor color.Color
 					switch pair {
 					case "00":
-						pixelColor = color00
+						pixelColor = bgpColors[0]
 					case "01":
-						pixelColor = color01
+						pixelColor = bgpColors[1]
 					case "10":
-						pixelColor = color10
+						pixelColor = bgpColors[2]
 					case "11":
-						pixelColor = color11
+						pixelColor = bgpColors[3]
 					}
 					screen.Set(200+8*x+j, 8*y+i, pixelColor)
 				}
@@ -167,6 +208,10 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 		}
 		tileMapAddr += 12
 	}
+}
+
+func (g *Game) drawWindow(screen *ebiten.Image, lcdc byte) {
+
 }
 
 func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
@@ -227,8 +272,8 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 
 func (g *Game) debugMemory(screen *ebiten.Image) {
 	bytesToWrite := ""
-	current := 0xFE00
-	for current <= 0xFEA0 {
+	current := 0x9800
+	for current <= 0x9900 {
 		endLine := current + 0x07
 		for current <= endLine {
 			bytesToWrite += fmt.Sprintf("%02X ", g.M.Read(uint16(current)))
@@ -259,25 +304,31 @@ func (g *Game) InterruptStep() {
 	if g.M.IME && g.M.IER[0] != 0 && iFlags != 0 {
 		g.M.IME = false
 		if g.M.IER[0]&0x01 == 1 && iFlags&0x01 == 1 {
+			// VBlank
 			g.M.Store(0xFF0F, iFlags&0xFE)
 			utils.PushStackShort(g.R, g.M, g.R.PC)
 			g.R.PC = 0x0040
-		} else if (g.M.IER[0]&0x02)>>1 == 1 && (iFlags&0x02)>>1 == 1 {
+		} else if g.M.IER[0]&0x02 == 0x02 && iFlags&0x02 == 0x02 {
+			// LCDC
 			g.M.Store(0xFF0F, iFlags&0xFD)
 			utils.PushStackShort(g.R, g.M, g.R.PC)
 			g.R.PC = 0x0048
-		} else if (g.M.IER[0]&0x04)>>2 == 1 && (iFlags&0x04)>>2 == 1 {
+		} else if g.M.IER[0]&0x04 == 0x04 && iFlags&0x04 == 0x04 {
+			// TIMA overflow
 			g.M.Store(0xFF0F, iFlags&0xFB)
 			utils.PushStackShort(g.R, g.M, g.R.PC)
 			g.R.PC = 0x0050
-		} else if (g.M.IER[0]&0x08)>>3 == 1 && (iFlags&0x08)>>3 == 1 {
+		} else if g.M.IER[0]&0x08 == 0x08 && iFlags&0x08 == 0x08 {
+			// Serial I/O transfer complete
 			g.M.Store(0xFF0F, iFlags&0xF7)
 			utils.PushStackShort(g.R, g.M, g.R.PC)
 			g.R.PC = 0x0058
-		} else if (g.M.IER[0]&0x10)>>4 == 1 && (iFlags&0x10)>>4 == 1 {
+		} else if g.M.IER[0]&0x10 == 0x10 && iFlags&0x10 == 0x10 {
+			// High to low P10-P13
 			g.M.Store(0xFF0F, iFlags&0xEF)
 			utils.PushStackShort(g.R, g.M, g.R.PC)
 			g.R.PC = 0x0060
 		}
+		g.R.Halted = false
 	}
 }

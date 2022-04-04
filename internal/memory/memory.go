@@ -115,11 +115,15 @@ func (m *Memory) getMemoryPart(address uint16) (*[]byte, uint16) {
 
 // Store stores a byte in an address of the memory.
 func (m *Memory) Store(address uint16, n byte) {
-	memoryPart, offset := m.getMemoryPart(address)
-	if memoryPart == nil {
-		panic(fmt.Sprintf("Memory part not implemented: %X", address))
+	if address < 0x8000 {
+		// Bank switching would go here, but we ain't doing this yet.
+	} else {
+		memoryPart, offset := m.getMemoryPart(address)
+		if memoryPart == nil {
+			panic(fmt.Sprintf("Memory part not implemented: %X", address))
+		}
+		(*memoryPart)[offset] = n
 	}
-	(*memoryPart)[offset] = n
 }
 
 func (m *Memory) Read(address uint16) byte {
