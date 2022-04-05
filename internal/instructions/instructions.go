@@ -102,13 +102,17 @@ func and(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
 }
 
 // Generic xor function.
-func xor(r *byte, op byte, nf, zf, hf, cf *bool) (error, uint16) {
+func xor(r *byte, op byte, nf, zf, hf, cf *bool, immediate bool) (error, uint16) {
 	*r ^= op
 	*zf = *r == 0
 	*nf = false
 	*hf = false
 	*cf = false
-	return nil, 1
+	if immediate {
+		return nil, 2
+	} else {
+		return nil, 1
+	}
 }
 
 // Generic compare function.
@@ -1201,49 +1205,49 @@ func andA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 // 0xA8
 // Performs an XOR of the register B against A, result to A.
 func xorB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.B, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xA9
 // Performs an XOR of the register C against A, result to A.
 func xorC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.C, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAA
 // Performs an XOR of the register D against A, result to A.
 func xorD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.D, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAB
 // Performs an XOR of the register E against A, result to A.
 func xorE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.E, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAC
 // Performs an XOR of the register H against A, result to A.
 func xorH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.H, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAD
 // Performs an XOR of the register L against A, result to A.
 func xorL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.L, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAE
 // Performs an XOR of the value in memory address HL against A, result to A.
 func xorHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, m.Read(r.HL()), &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xAF
 // Performs an XOR of the register A against itself.
 func xorA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	return xor(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF)
+	return xor(&r.A, r.A, &r.NF, &r.ZF, &r.HF, &r.CF, false)
 }
 
 // 0xB0
@@ -1446,6 +1450,18 @@ func execCB(r *registers.Registers, m *memory.Memory, args []byte) (error, uint1
 	return instruction(r, m, args)
 }
 
+// 0xCC
+// Calls a function if ZF is set.
+func callZnn(r *registers.Registers, m *memory.Memory, args []byte) (error, uint16) {
+	if r.ZF {
+		utils.PushStackShort(r, m, r.PC+3)
+		r.PC = uint16(args[1]) + uint16(args[2])<<8
+		return nil, 0
+	} else {
+		return nil, 3
+	}
+}
+
 // 0xCD
 // Calls a function (pushes the next instruction address to the stack and goes to nn)
 func callnn(r *registers.Registers, m *memory.Memory, args []byte) (error, uint16) {
@@ -1521,6 +1537,14 @@ func subAn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16
 	return sub(&r.A, args[1], &r.NF, &r.ZF, &r.HF, &r.CF, true)
 }
 
+// 0xD7
+// Calls routine at 0x0010
+func rst10(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	utils.PushStackShort(r, m, r.PC+1)
+	r.PC = 0x0010
+	return nil, 0
+}
+
 // 0xD8
 // Returns if CF is set.
 func retC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
@@ -1536,6 +1560,24 @@ func retC(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 func reti(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
 	r.PC = utils.PopStackShort(r, m)
 	m.IME = true
+	return nil, 0
+}
+
+// 0xDA
+// Sets PC as specified in the arguments if C flag is set
+func jpCnn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
+	if r.CF {
+		r.PC = uint16(args[1]) + uint16(args[2])<<8
+		return nil, 0
+	}
+	return nil, 3
+}
+
+// 0xDF
+// Calls routine at 0x0018
+func rst18(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	utils.PushStackShort(r, m, r.PC+1)
+	r.PC = 0x0018
 	return nil, 0
 }
 
@@ -1580,6 +1622,14 @@ func andn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16)
 	return nil, 2
 }
 
+// 0xE7
+// Calls routine at 0x0020
+func rst20(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	utils.PushStackShort(r, m, r.PC+1)
+	r.PC = 0x0020
+	return nil, 0
+}
+
 // 0xE9
 // Jumps to the address stored in HL
 func jpHL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
@@ -1592,6 +1642,12 @@ func jpHL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 func ldnnA(r *registers.Registers, m *memory.Memory, args []byte) (error, uint16) {
 	m.Store(uint16(args[2])<<8+uint16(args[1]), r.A)
 	return nil, 3
+}
+
+// 0xEE
+// xor of an 8 bit immediate against A.
+func xorn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) {
+	return xor(&r.A, args[1], &r.NF, &r.ZF, &r.HF, &r.CF, true)
 }
 
 // 0xEF
@@ -1643,6 +1699,14 @@ func orn(r *registers.Registers, _ *memory.Memory, args []byte) (error, uint16) 
 	r.HF = false
 	r.CF = false
 	return nil, 1
+}
+
+// 0xF7
+// Calls routine at 0x0030
+func rst30(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	utils.PushStackShort(r, m, r.PC+1)
+	r.PC = 0x0030
+	return nil, 0
 }
 
 // 0xFA
@@ -1884,7 +1948,7 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	ret,
 	jpZnn,
 	execCB,
-	unimplemented,
+	callZnn,
 	callnn,
 	adcAn,
 	rst08,
@@ -1895,15 +1959,15 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	pushDE,
 	subAn,
-	unimplemented,
+	rst10,
 	retC,
 	reti,
+	jpCnn,
 	unimplemented,
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented,
-	unimplemented,
+	rst18,
 	ldhnA, // 0xE0
 	popHL,
 	ldhCA,
@@ -1911,14 +1975,14 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	pushHL,
 	andn,
-	unimplemented,
+	rst20,
 	unimplemented,
 	jpHL,
 	ldnnA,
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented,
+	xorn,
 	rst28,
 	ldhAn, // 0xF0
 	popAF,
@@ -1927,7 +1991,7 @@ var InstructionTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []b
 	unimplemented,
 	pushAF,
 	orn,
-	unimplemented,
+	rst30,
 	unimplemented,
 	unimplemented,
 	ldAnn,
@@ -1956,6 +2020,16 @@ var cyclesTable = [256]int{
 	6, 6, 4, 2, 0, 8, 4, 8, 6, 4, 8, 2, 0, 0, 4, 8, // 0xf_
 }
 
+// Generic shift left function.
+func sla(r *byte, zf, nf, hf, cf *bool) (error, uint16) {
+	*nf = false
+	*hf = false
+	*cf = *r>>7 == 1
+	*r <<= 1
+	*zf = *r == 0
+	return nil, 2
+}
+
 // Generic function for swapping nibbles.
 func swap(r *byte, zf, nf, hf, cf *bool) (error, uint16) {
 	*r = *r<<4 + *r>>4
@@ -1974,6 +2048,18 @@ func test(bit int, r byte, zf, hf, nf *bool) (error, uint16) {
 	return nil, 2
 }
 
+// Generic reset bit function
+func reset(r *byte, bit byte) (error, uint16) {
+	*r &= (0xFF ^ (0x01 << bit))
+	return nil, 2
+}
+
+// Generic set bit function
+func set(r *byte, bit byte) (error, uint16) {
+	*r |= (0x01 << bit)
+	return nil, 2
+}
+
 // 0xCB19
 // Rotate C right through carry flag.
 func rrC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
@@ -1989,15 +2075,59 @@ func rrC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
 	return nil, 2
 }
 
+// 0xCB20
+// Shift left B into carry, LSB = 0.
+func slaB(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.B, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB21
+// Shift left C into carry, LSB = 0.
+func slaC(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.C, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB22
+// Shift left D into carry, LSB = 0.
+func slaD(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.D, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB23
+// Shift left E into carry, LSB = 0.
+func slaE(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.E, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB24
+// Shift left H into carry, LSB = 0.
+func slaH(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.H, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB25
+// Shift left L into carry, LSB = 0.
+func slaL(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return sla(&r.L, &r.ZF, &r.NF, &r.HF, &r.CF)
+}
+
+// 0xCB26
+// Shift left value in address HL into carry, LSB = 0.
+func slaHL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	data := m.Read(r.HL())
+	r.NF = false
+	r.HF = false
+	r.CF = data>>7 == 1
+	data <<= 1
+	r.ZF = data == 0
+	m.Store(r.HL(), data)
+	return nil, 2
+}
+
 // 0xCB27
 // Shift left A into carry, LSB = 0.
 func slaA(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.NF = false
-	r.HF = false
-	r.CF = r.A>>7 == 1
-	r.A <<= 1
-	r.ZF = r.A == 0
-	return nil, 2
+	return sla(&r.A, &r.ZF, &r.NF, &r.HF, &r.CF)
 }
 
 // 0xCB30
@@ -2462,6 +2592,42 @@ func test7A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) 
 	return test(7, r.A, &r.ZF, &r.HF, &r.NF)
 }
 
+// 0xCB80
+// Reset bit 0 of B.
+func res0B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 0)
+}
+
+// 0xCB81
+// Reset bit 0 of C.
+func res0C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 0)
+}
+
+// 0xCB82
+// Reset bit 0 of D.
+func res0D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 0)
+}
+
+// 0xCB83
+// Reset bit 0 of E.
+func res0E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 0)
+}
+
+// 0xCB84
+// Reset bit 0 of H.
+func res0H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 0)
+}
+
+// 0xCB85
+// Reset bit 0 of L.
+func res0L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 0)
+}
+
 // 0xCB86
 // Reset bit 0 of value in memory address HL.
 func res0HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
@@ -2472,8 +2638,742 @@ func res0HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) 
 // 0xCB87
 // Reset bit 0 of A.
 func res0A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
-	r.A &= 0xFE
+	return reset(&r.A, 0)
+}
+
+// 0xCB88
+// Reset bit 1 of B.
+func res1B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 1)
+}
+
+// 0xCB89
+// Reset bit 1 of C.
+func res1C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 1)
+}
+
+// 0xCB8A
+// Reset bit 1 of D.
+func res1D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 1)
+}
+
+// 0xCB8B
+// Reset bit 1 of E.
+func res1E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 1)
+}
+
+// 0xCB8C
+// Reset bit 1 of H.
+func res1H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 1)
+}
+
+// 0xCB8D
+// Reset bit 1 of L.
+func res1L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 1)
+}
+
+// 0xCB8E
+// Reset bit 1 of value in memory address HL.
+func res1HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xFD)
 	return nil, 2
+}
+
+// 0xCB8F
+// Reset bit 1 of A.
+func res1A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 1)
+}
+
+// 0xCB90
+// Reset bit 2 of B.
+func res2B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 2)
+}
+
+// 0xCB91
+// Reset bit 2 of C.
+func res2C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 2)
+}
+
+// 0xCB92
+// Reset bit 2 of D.
+func res2D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 2)
+}
+
+// 0xCB93
+// Reset bit 2 of E.
+func res2E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 2)
+}
+
+// 0xCB94
+// Reset bit 2 of H.
+func res2H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 2)
+}
+
+// 0xCB95
+// Reset bit 2 of L.
+func res2L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 2)
+}
+
+// 0xCB96
+// Reset bit 2 of value in memory address HL.
+func res2HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xFB)
+	return nil, 2
+}
+
+// 0xCB97
+// Reset bit 2 of A.
+func res2A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 2)
+}
+
+// 0xCB98
+// Reset bit 3 of B.
+func res3B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 3)
+}
+
+// 0xCB99
+// Reset bit 3 of C.
+func res3C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 3)
+}
+
+// 0xCB9A
+// Reset bit 3 of D.
+func res3D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 3)
+}
+
+// 0xCB9B
+// Reset bit 3 of E.
+func res3E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 3)
+}
+
+// 0xCB9C
+// Reset bit 3 of H.
+func res3H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 3)
+}
+
+// 0xCB9D
+// Reset bit 3 of L.
+func res3L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 3)
+}
+
+// 0xCB9E
+// Reset bit 3 of value in memory address HL.
+func res3HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xF7)
+	return nil, 2
+}
+
+// 0xCB9F
+// Reset bit 3 of A.
+func res3A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 3)
+}
+
+// 0xCBA0
+// Reset bit 4 of B.
+func res4B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 4)
+}
+
+// 0xCBA1
+// Reset bit 4 of C.
+func res4C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 4)
+}
+
+// 0xCBA2
+// Reset bit 4 of D.
+func res4D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 4)
+}
+
+// 0xCBA3
+// Reset bit 4 of E.
+func res4E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 4)
+}
+
+// 0xCBA4
+// Reset bit 4 of H.
+func res4H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 4)
+}
+
+// 0xCBA5
+// Reset bit 4 of L.
+func res4L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 4)
+}
+
+// 0xCBA6
+// Reset bit 4 of value in memory address HL.
+func res4HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xEF)
+	return nil, 2
+}
+
+// 0xCBA7
+// Reset bit 4 of A.
+func res4A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 4)
+}
+
+// 0xCBA8
+// Reset bit 5 of B.
+func res5B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 5)
+}
+
+// 0xCBA9
+// Reset bit 5 of C.
+func res5C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 5)
+}
+
+// 0xCBAA
+// Reset bit 5 of D.
+func res5D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 5)
+}
+
+// 0xCBAB
+// Reset bit 5 of E.
+func res5E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 5)
+}
+
+// 0xCBAC
+// Reset bit 5 of H.
+func res5H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 5)
+}
+
+// 0xCBAD
+// Reset bit 5 of L.
+func res5L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 5)
+}
+
+// 0xCBAE
+// Reset bit 5 of value in memory address HL.
+func res5HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xDF)
+	return nil, 2
+}
+
+// 0xCBAF
+// Reset bit 5 of A.
+func res5A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 5)
+}
+
+// 0xCBB0
+// Reset bit 6 of B.
+func res6B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 6)
+}
+
+// 0xCBB1
+// Reset bit 6 of C.
+func res6C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 6)
+}
+
+// 0xCBB2
+// Reset bit 6 of D.
+func res6D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 6)
+}
+
+// 0xCBB3
+// Reset bit 6 of E.
+func res6E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 6)
+}
+
+// 0xCBB4
+// Reset bit 6 of H.
+func res6H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 6)
+}
+
+// 0xCBB5
+// Reset bit 6 of L.
+func res6L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 6)
+}
+
+// 0xCBB6
+// Reset bit 6 of value in memory address HL.
+func res6HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0xBF)
+	return nil, 2
+}
+
+// 0xCBB7
+// Reset bit 6 of A.
+func res6A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 6)
+}
+
+// 0xCBB8
+// Reset bit 7 of B.
+func res7B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.B, 7)
+}
+
+// 0xCBB9
+// Reset bit 7 of C.
+func res7C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.C, 7)
+}
+
+// 0xCBBA
+// Reset bit 7 of D.
+func res7D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.D, 7)
+}
+
+// 0xCBBB
+// Reset bit 7 of E.
+func res7E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.E, 7)
+}
+
+// 0xCBBC
+// Reset bit 7 of H.
+func res7H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.H, 7)
+}
+
+// 0xCBBD
+// Reset bit 7of L.
+func res7L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.L, 7)
+}
+
+// 0xCBBE
+// Reset bit 7 of value in memory address HL.
+func res7HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())&0x7F)
+	return nil, 2
+}
+
+// 0xCBBF
+// Reset bit 7 of A.
+func res7A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return reset(&r.A, 7)
+}
+
+// 0xCBC0
+// Set bit 0 of B.
+func set0B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 0)
+}
+
+// 0xCBC1
+// Set bit 0 of C.
+func set0C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 0)
+}
+
+// 0xCBC2
+// Set bit 0 of D.
+func set0D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 0)
+}
+
+// 0xCBC3
+// Set bit 0 of E.
+func set0E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 0)
+}
+
+// 0xCBC4
+// Set bit 0 of H.
+func set0H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 0)
+}
+
+// 0xCBC5
+// Set bit 0 of L.
+func set0L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 0)
+}
+
+// 0xCBC6
+// Set bit 0 of value in memory address HL.
+func set0HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x01)
+	return nil, 2
+}
+
+// 0xCBC7
+// Set bit 0 of A.
+func set0A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 0)
+}
+
+// 0xCBC8
+// Set bit 1 of B.
+func set1B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 1)
+}
+
+// 0xCBC9
+// Set bit 1 of C.
+func set1C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 1)
+}
+
+// 0xCBCA
+// Set bit 1 of D.
+func set1D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 1)
+}
+
+// 0xCBCB
+// Set bit 1 of E.
+func set1E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 1)
+}
+
+// 0xCBCC
+// Set bit 1 of H.
+func set1H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 1)
+}
+
+// 0xCBCD
+// Set bit 1 of L.
+func set1L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 1)
+}
+
+// 0xCBCE
+// Set bit 1 of value in memory address HL.
+func set1HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x02)
+	return nil, 2
+}
+
+// 0xCBCF
+// Set bit 1 of A.
+func set1A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 1)
+}
+
+// 0xCBD0
+// Set bit 2 of B.
+func set2B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 2)
+}
+
+// 0xCBD1
+// Set bit 2 of C.
+func set2C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 2)
+}
+
+// 0xCBD2
+// Set bit 2 of D.
+func set2D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 2)
+}
+
+// 0xCBD3
+// Set bit 2 of E.
+func set2E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 2)
+}
+
+// 0xCBD4
+// Set bit 2 of H.
+func set2H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 2)
+}
+
+// 0xCBD5
+// Set bit 2 of L.
+func set2L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 2)
+}
+
+// 0xCBD6
+// Set bit 2 of value in memory address HL.
+func set2HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x04)
+	return nil, 2
+}
+
+// 0xCBD7
+// Set bit 2 of A.
+func set2A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 2)
+}
+
+// 0xCBD8
+// Set bit 3 of B.
+func set3B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 3)
+}
+
+// 0xCBD9
+// Set bit 3 of C.
+func set3C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 3)
+}
+
+// 0xCBDA
+// Set bit 3 of D.
+func set3D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 3)
+}
+
+// 0xCBDB
+// Set bit 3 of E.
+func set3E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 3)
+}
+
+// 0xCBDC
+// Set bit 3 of H.
+func set3H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 3)
+}
+
+// 0xCBDD
+// Set bit 3 of L.
+func set3L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 3)
+}
+
+// 0xCBDE
+// Set bit 3 of value in memory address HL.
+func set3HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x08)
+	return nil, 2
+}
+
+// 0xCBDF
+// Set bit 3 of A.
+func set3A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 3)
+}
+
+// 0xCBE0
+// Set bit 4 of B.
+func set4B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 4)
+}
+
+// 0xCBE1
+// Set bit 4 of C.
+func set4C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 4)
+}
+
+// 0xCBE2
+// Set bit 4 of D.
+func set4D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 4)
+}
+
+// 0xCBE3
+// Set bit 4 of E.
+func set4E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 4)
+}
+
+// 0xCBE4
+// Set bit 4 of H.
+func set4H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 4)
+}
+
+// 0xCBE5
+// Set bit 4 of L.
+func set4L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 4)
+}
+
+// 0xCBE6
+// Set bit 4 of value in memory address HL.
+func set4HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x10)
+	return nil, 2
+}
+
+// 0xCBE7
+// Set bit 4 of A.
+func set4A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 4)
+}
+
+// 0xCBE8
+// Set bit 5 of B.
+func set5B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 5)
+}
+
+// 0xCBE9
+// Set bit 5 of C.
+func set5C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 5)
+}
+
+// 0xCBEA
+// Set bit 5 of D.
+func set5D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 5)
+}
+
+// 0xCBEB
+// Set bit 5 of E.
+func set5E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 5)
+}
+
+// 0xCBEC
+// Set bit 5 of H.
+func set5H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 5)
+}
+
+// 0xCBED
+// Set bit 5 of L.
+func set5L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 5)
+}
+
+// 0xCBEE
+// Set bit 5 of value in memory address HL.
+func set5HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x20)
+	return nil, 2
+}
+
+// 0xCBEF
+// Set bit 5 of A.
+func set5A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 5)
+}
+
+// 0xCBF0
+// Set bit 6 of B.
+func set6B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 6)
+}
+
+// 0xCBF1
+// Set bit 6 of C.
+func set6C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 6)
+}
+
+// 0xCBF2
+// Set bit 6 of D.
+func set6D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 6)
+}
+
+// 0xCBF3
+// Set bit 6 of E.
+func set6E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 6)
+}
+
+// 0xCBF4
+// Set bit 6 of H.
+func set6H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 6)
+}
+
+// 0xCBF5
+// Set bit 6 of L.
+func set6L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 6)
+}
+
+// 0xCBF6
+// Set bit 6 of value in memory address HL.
+func set6HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x40)
+	return nil, 2
+}
+
+// 0xCBF7
+// Set bit 6 of A.
+func set6A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 6)
+}
+
+// 0xCBF8
+// Set bit 7 of B.
+func set7B(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.B, 7)
+}
+
+// 0xCBF9
+// Set bit 7 of C.
+func set7C(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.C, 7)
+}
+
+// 0xCBFA
+// Set bit 7 of D.
+func set7D(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.D, 7)
+}
+
+// 0xCBFB
+// Set bit 7 of E.
+func set7E(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.E, 7)
+}
+
+// 0xCBFC
+// Set bit 7 of H.
+func set7H(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.H, 7)
+}
+
+// 0xCBFD
+// Set bit 7 of L.
+func set7L(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.L, 7)
+}
+
+// 0xCBFE
+// Set bit 7 of value in memory address HL.
+func set7HL(r *registers.Registers, m *memory.Memory, _ []byte) (error, uint16) {
+	m.Store(r.HL(), m.Read(r.HL())|0x80)
+	return nil, 2
+}
+
+// 0xCBFF
+// Set bit 7 of A.
+func set7A(r *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16) {
+	return set(&r.A, 7)
 }
 
 var CBTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (error, uint16){
@@ -2509,13 +3409,13 @@ var CBTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (err
 	unimplemented,
 	unimplemented,
 	unimplemented,
-	unimplemented, // 0x20
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	slaB, // 0x20
+	slaC,
+	slaD,
+	slaE,
+	slaH,
+	slaL,
+	slaHL,
 	slaA,
 	unimplemented,
 	unimplemented,
@@ -2605,134 +3505,134 @@ var CBTable = [256]func(_ *registers.Registers, _ *memory.Memory, _ []byte) (err
 	test7L,
 	test7HL,
 	test7A,
-	unimplemented, // 0x80
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	res0B, // 0x80
+	res0C,
+	res0D,
+	res0E,
+	res0H,
+	res0L,
 	res0HL,
 	res0A,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0x90
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xA0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xB0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xC0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xD0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xE0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented, // 0xF0
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
-	unimplemented,
+	res1B,
+	res1C,
+	res1D,
+	res1E,
+	res1H,
+	res1L,
+	res1HL,
+	res1A,
+	res2B, // 0x90
+	res2C,
+	res2D,
+	res2E,
+	res2H,
+	res2L,
+	res2HL,
+	res2A,
+	res3B,
+	res3C,
+	res3D,
+	res3E,
+	res3H,
+	res3L,
+	res3HL,
+	res3A,
+	res4B, // 0xA0
+	res4C,
+	res4D,
+	res4E,
+	res4H,
+	res4L,
+	res4HL,
+	res4A,
+	res5B,
+	res5C,
+	res5D,
+	res5E,
+	res5H,
+	res5L,
+	res5HL,
+	res5A,
+	res6B, // 0xB0
+	res6C,
+	res6D,
+	res6E,
+	res6H,
+	res6L,
+	res6HL,
+	res6A,
+	res7B,
+	res7C,
+	res7D,
+	res7E,
+	res7H,
+	res7L,
+	res7HL,
+	res7A,
+	set0B, // 0xC0
+	set0C,
+	set0D,
+	set0E,
+	set0H,
+	set0L,
+	set0HL,
+	set0A,
+	set1B,
+	set1C,
+	set1D,
+	set1E,
+	set1H,
+	set1L,
+	set1HL,
+	set1A,
+	set2B, // 0xD0
+	set2C,
+	set2D,
+	set2E,
+	set2H,
+	set2L,
+	set2HL,
+	set2A,
+	set3B,
+	set3C,
+	set3D,
+	set3E,
+	set3H,
+	set3L,
+	set3HL,
+	set3A,
+	set4B, // 0xE0
+	set4C,
+	set4D,
+	set4E,
+	set4H,
+	set4L,
+	set4HL,
+	set4A,
+	set5B,
+	set5C,
+	set5D,
+	set5E,
+	set5H,
+	set5L,
+	set5HL,
+	set5A,
+	set6B, // 0xF0
+	set6C,
+	set6D,
+	set6E,
+	set6H,
+	set6L,
+	set6HL,
+	set6A,
+	set7B,
+	set7C,
+	set7D,
+	set7E,
+	set7H,
+	set7L,
+	set7HL,
+	set7A,
 }
 
 var cbCyclesTable = [256]int{

@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -21,7 +22,12 @@ import (
 var frequency = 4194304
 var cyclesPerFrame = frequency / 60
 var cyclesPerDivUpdate = cyclesPerFrame / (16384 / 60)
-var cyclesPerTimaUpdate = [4]int{4096 / 60, 262144 / 60, 65536 / 60, 16384 / 60}
+var cyclesPerTimaUpdate = [4]int{
+	cyclesPerFrame / (4096 / 60),
+	cyclesPerFrame / (262144 / 60),
+	cyclesPerFrame / (65536 / 60),
+	cyclesPerFrame / (16384 / 60),
+}
 var gameFont font.Face
 
 var color00 = color.RGBA{0xE0, 0xF8, 0xCF, 0xFF}
@@ -99,6 +105,8 @@ func (g *Game) Update() error {
 						g.M.Store(0xFF0F, g.M.Read(0xFF0F)|0x04)
 					}
 					g.M.Store(0xFF05, g.M.Read(0xFF06))
+				} else {
+					g.M.Store(0xFF05, byte(currentTIMA))
 				}
 			}
 		}
@@ -190,17 +198,8 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 
 				for j := 0; j < 8; j++ {
 					pair := string(binaryTileLineDown[j]) + string(binaryTileLineUp[j])
-					var pixelColor color.Color
-					switch pair {
-					case "00":
-						pixelColor = bgpColors[0]
-					case "01":
-						pixelColor = bgpColors[1]
-					case "10":
-						pixelColor = bgpColors[2]
-					case "11":
-						pixelColor = bgpColors[3]
-					}
+					bgColor, _ := strconv.ParseInt(pair, 2, 8)
+					pixelColor := bgpColors[bgColor]
 					screen.Set(200+8*x+j, 8*y+i, pixelColor)
 				}
 			}
@@ -216,6 +215,22 @@ func (g *Game) drawWindow(screen *ebiten.Image, lcdc byte) {
 
 func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 	var height int
+	obp0 := g.M.Read(0xFF48)
+	obp1 := g.M.Read(0xFF49)
+	obps := [2][4]color.RGBA{
+		{
+			colors[obp0&0x03],
+			colors[obp0&0x0C>>2],
+			colors[obp0&0x30>>4],
+			colors[obp0>>6],
+		},
+		{
+			colors[obp1&0x03],
+			colors[obp1&0x0C>>2],
+			colors[obp1&0x30>>4],
+			colors[obp1>>6],
+		},
+	}
 
 	if lcdc&0x04 == 0 {
 		height = 1
@@ -235,6 +250,7 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 		flags := g.M.Read(finalSpriteAddr - 4*nSprite + 3)
 		priority := flags&0x80 == 0
 		tileAddr := 0x8000 + uint16(patternNumber)*16
+		obp := obps[flags&0x10>>4]
 
 		for i := 0; i < 8*height; i++ {
 			tileLineUp := g.M.Read(tileAddr)
@@ -251,18 +267,11 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 					// Check that the sprite either has priority or is on a 00 pixel.
 					if priority || screen.At(200+xPosition+j-8, yPosition+i-16) == color00 {
 						pair := string(binaryTileLineDown[j]) + string(binaryTileLineUp[j])
-						var pixelColor color.Color
-						switch pair {
-						case "00":
-							pixelColor = color00
-						case "01":
-							pixelColor = color01
-						case "10":
-							pixelColor = color10
-						case "11":
-							pixelColor = color11
+						obColor, _ := strconv.ParseInt(pair, 2, 8)
+						if obColor != 0 {
+							pixelColor := obp[obColor]
+							screen.Set(200+xPosition+j-8, yPosition+i-16, pixelColor)
 						}
-						screen.Set(200+xPosition+j-8, yPosition+i-16, pixelColor)
 					}
 				}
 			}
@@ -272,8 +281,8 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 
 func (g *Game) debugMemory(screen *ebiten.Image) {
 	bytesToWrite := ""
-	current := 0x9800
-	for current <= 0x9900 {
+	current := 0xFE00
+	for current <= 0xFEA0 {
 		endLine := current + 0x07
 		for current <= endLine {
 			bytesToWrite += fmt.Sprintf("%02X ", g.M.Read(uint16(current)))
