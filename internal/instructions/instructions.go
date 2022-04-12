@@ -3662,6 +3662,9 @@ func Execute(r *registers.Registers, m *memory.Memory, instructionArray []byte) 
 	cycles := cyclesTable[opCode]
 	// Execute the operation
 	err, jump := operation(r, m, instructionArray)
+	// Handle changes in flags.
+	// This shouldn't be done this way and all flags info should be in the F register.
+	// I didn't foresee this mess. I'll fix it some time later.
 	if !flagsRecovered {
 		var f8 byte = 0x00
 		var f7 byte = 0x00
@@ -3681,6 +3684,10 @@ func Execute(r *registers.Registers, m *memory.Memory, instructionArray []byte) 
 		}
 		r.F = f8 + f7 + f6 + f5
 	} else {
+		r.ZF = r.F&0x80 != 0
+		r.NF = r.F&0x40 != 0
+		r.HF = r.F&0x20 != 0
+		r.CF = r.F&0x10 != 0
 		flagsRecovered = false
 	}
 	return err, jump, cycles
