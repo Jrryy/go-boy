@@ -72,13 +72,8 @@ func (g *Game) Update() error {
 	currentCycles := 0
 	divCycles := 0
 	timaCycles := 0
-	if ebiten.IsKeyPressed(ebiten.KeySpace) {
-		g.Debug = true
-	}
 	// Run instructions until we reach the maximum an actual GB would have ran in the same time.
 	for currentCycles < cyclesPerFrame {
-		// Joypad stuff. For now let's just consider the use is not pressing a single button.
-		g.M.Store(0xFF00, 0xCF)
 		var err error
 		var bytes uint16
 		var cycles int
@@ -163,6 +158,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			g.drawSprites(screen, lcdc)
 		}
 	}
+	// g.debugMemory(screen)
 }
 
 // Transfer sprites data to OAM.
@@ -241,7 +237,7 @@ func (g *Game) drawBackground(screen *ebiten.Image, lcdc byte) {
 					pair := string(binaryTileLineMSB[j]) + string(binaryTileLineLSB[j])
 					bgColor, _ := strconv.ParseInt(pair, 2, 8)
 					pixelColor := bgpColors[bgColor]
-					screen.Set(200+8*x+j, 8*y+i, pixelColor)
+					screen.Set(8*x+j, 8*y+i, pixelColor)
 				}
 			}
 			// Next tile.
@@ -335,7 +331,7 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 
 				// Check that the pixel is on screen and should be drawn.
 				if screenXPosition >= 0 && screenXPosition < 160 && screenYPosition >= 0 && screenYPosition < 144 {
-					adjustedXPosition := 200 + screenXPosition
+					adjustedXPosition := screenXPosition
 					adjustedYPosition := screenYPosition
 					// Check that the sprite either has priority or is on a 00 pixel.
 					// Sprites should not be drawn on top of the background unless one of these two conditions is true.
@@ -358,9 +354,9 @@ func (g *Game) drawSprites(screen *ebiten.Image, lcdc byte) {
 func (g *Game) debugMemory(screen *ebiten.Image) {
 	bytesToWrite := ""
 	// First address to print.
-	current := 0x9800
+	current := 0xFF00
 	// Print until we reach the specified address.
-	for current <= 0x9A00 {
+	for current <= 0xFF00 {
 		endLine := current + 0x0F
 		for current <= endLine {
 			bytesToWrite += fmt.Sprintf("%02X ", g.M.Read(uint16(current)))
@@ -373,7 +369,7 @@ func (g *Game) debugMemory(screen *ebiten.Image) {
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	return 640, 576
+	return outsideWidth / 4, outsideHeight / 4
 }
 
 // Check if there is an interrupt requested, and let one more instruction run.

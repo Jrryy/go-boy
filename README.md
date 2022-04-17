@@ -9,12 +9,25 @@ go build ./cmd/go-boy
 ./go-boy ~/path/to/the/game.gb
 ```
 
+Button mapping:
+```
+A -> Z
+B -> X
+Start -> Enter
+Select -> Backspace
+Down -> Arrow down
+Up -> Arrow up
+Left -> Arrow left
+Right -> Arrow right
+```
+A controller can also be used.
+
 Also, for reference on my tought process while building this, check out [my development process](docs/development_process.md).
 
 ## Current state and next steps
-The demo gameplay on Tetris and Dr. Mario are working and looping correctly.
+ROM only games playable with both keyboard and controller.
 
-Next steps: handle user input.
+Next steps: Add all the instructions.
 
 ## Aren't there enough emulators already?
 Yes, but I made this one myself :)

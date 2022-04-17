@@ -3,11 +3,22 @@ package memory
 import (
 	"fmt"
 	"os"
+
+	"github.com/hajimehoshi/ebiten/v2"
+)
+
+// These represent the three different states of input handling:
+// P14 = arrows, P15 = Start, Select, A, B, P00 when input unavailable.
+const (
+	P00 = iota
+	P14
+	P15
 )
 
 // Memory represents the different parts of the GB memory.
 // It's been split in different parts only to help understand it better.
 type Memory struct {
+	InputMode   int
 	IME         bool
 	IMEReqType  bool
 	IMESteps    byte
@@ -117,6 +128,15 @@ func (m *Memory) getMemoryPart(address uint16) (*[]byte, uint16) {
 func (m *Memory) Store(address uint16, n byte) {
 	if address < 0x8000 {
 		// Bank switching would go here, but we ain't doing this yet.
+	} else if address == 0xFF00 {
+		// Handling input.
+		if n == 0x10 {
+			m.InputMode = P14
+		} else if n == 0x20 {
+			m.InputMode = P15
+		} else {
+			m.InputMode = P00
+		}
 	} else {
 		memoryPart, offset := m.getMemoryPart(address)
 		if memoryPart == nil {
@@ -127,13 +147,61 @@ func (m *Memory) Store(address uint16, n byte) {
 }
 
 func (m *Memory) Read(address uint16) byte {
-	memoryPart, offset := m.getMemoryPart(address)
-	if memoryPart == nil {
-		panic(fmt.Sprintf("Memory part not implemented: %X", address))
+	if address == 0xFF00 {
+		return m.getUserInput()
+	} else {
+		memoryPart, offset := m.getMemoryPart(address)
+		if memoryPart == nil {
+			panic(fmt.Sprintf("Memory part not implemented: %X", address))
+		}
+		return (*memoryPart)[offset]
 	}
-	return (*memoryPart)[offset]
 }
 
 func (m *Memory) ReadInstruction(address uint16) []byte {
 	return []byte{m.Read(address), m.Read(address + 1), m.Read(address + 2)}
+}
+
+// Processes the user's input
+func (m *Memory) getUserInput() byte {
+	capturedInput := byte(0x00)
+	if m.InputMode == P14 {
+		if ebiten.IsKeyPressed(ebiten.KeyZ) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonRightBottom) {
+			// A
+			capturedInput |= 0x01
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyX) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonRightRight) {
+			// B
+			capturedInput |= 0x02
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyBackspace) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonCenterLeft) {
+			// Select
+			capturedInput |= 0x04
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyEnter) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonCenterRight) {
+			// Start
+			capturedInput |= 0x08
+		}
+		return ^capturedInput
+	} else if m.InputMode == P15 {
+		if ebiten.IsKeyPressed(ebiten.KeyArrowRight) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonLeftRight) {
+			// Right
+			capturedInput |= 0x01
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonLeftLeft) {
+			// Left
+			capturedInput |= 0x02
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowUp) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonLeftTop) {
+			// Up
+			capturedInput |= 0x04
+		}
+		if ebiten.IsKeyPressed(ebiten.KeyArrowDown) || ebiten.IsStandardGamepadButtonPressed(0, ebiten.StandardGamepadButtonLeftBottom) {
+			// Down
+			capturedInput |= 0x08
+		}
+		return ^capturedInput
+	} else {
+		return 0xCF
+	}
 }
